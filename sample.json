@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "source_file": "sample.mov",
+    "processing_time": 100.27,
+    "num_speakers": 3,
+    "created_at": "2025-11-27T00:24:17.941858"
+  },
+  "transcript": [
+    {
+      "timestamp": "0:00:01",
+      "speaker": "SPEAKER_02",
+      "content": "ああ あれどうやって止めるんだこれ。",
+      "is_narration": false
+    },
+    {
+      "timestamp": "0:00:30",
+      "speaker": "SPEAKER_01",
+      "content": "ん。",
+      "is_narration": false
+    },
+    {
+      "timestamp": "0:01:30",
+      "speaker": "SPEAKER_00",
+      "content": "今日は、ワニャンです。 カルフルアメコリ、毎日ちょっとしたご褒美を、レディーゴーで頂きます。 レディアムガーナ、食べていいですか? どうですか? 言葉はしない、劇的一つで。レミアムガーナ。 レミアムガーナ、夜Nathanの片隣で会いに来た。 買い物に行って、せいで悩みます。 ご視聴ありがとうございました!。",
+      "is_narration": false
+    }
+  ]
+}
