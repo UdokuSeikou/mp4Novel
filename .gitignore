@@ -3,6 +3,12 @@ node_modules/
 npm-debug.log*
 package-lock.json
 
+# Pythonが生成するキャッシュや一時ファイル
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Environment variables
 .env
 .env.local
