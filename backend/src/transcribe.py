@@ -166,52 +166,64 @@ class TranscriptionProcessor:
 class SpeakerDiarizer:
     """話者分離を担当するクラス"""
 
-    def __init__(self, batch_size: int = 8):
-        """
-        Args:
-            batch_size: 埋め込み計算のバッチサイズ
-        """
-        self.batch_size = batch_size
+    def __init__(self):
+        """初期化"""
         self.encoder = VoiceEncoder()
 
-    # 音声・動画データから話者特徴を抽出
-    def extract_embeddings(
+    # Whisperセグメント単位で話者特徴を抽出
+    def extract_embeddings_per_whisper_segment(
         self,
-        segments: List[Dict],
+        file_path: str,
+        transcription: Dict,
         sr: int
-    ) -> np.ndarray:
-        """話者埋め込みを抽出
+    ) -> Tuple[List[int], np.ndarray]:
+        """Whisper セグメントごとに埋め込みを抽出
 
         Args:
-            segments: セグメントリスト
+            file_path: 音声ファイルパス
+            transcription: Whisper の文字起こし結果
             sr: サンプリングレート
 
         Returns:
-            埋め込み行列（N x 256）
+            (セグメントインデックスリスト, 埋め込み行列)
         """
-        print("話者特徴を抽出中...")
+        print("Whisper セグメント単位で話者特徴を抽出中...")
 
-        embeddings = []
+        audio, _ = librosa.load(file_path, sr=sr, mono=True)
+        embeddings_list = []
+        segment_indices = []
 
-        for i in tqdm(range(0, len(segments), self.batch_size)):
-            batch = segments[i:i + self.batch_size]
+        # Whisper セグメント（会話の単位）ごとに処理
+        for idx, seg in enumerate(tqdm(transcription["segments"])):
+            duration = seg["end"] - seg["start"]
 
-            for segment in batch:
-                try:
-                    wav = preprocess_wav(segment["audio"], source_sr=sr)
-                    embedding = self.encoder.embed_utterance(wav)
-                    embeddings.append(embedding)
-                except Exception as e:
-                    print(f"⚠ セグメント処理エラー: {e}")
-                    # エラー時はゼロベクトルを追加
-                    embeddings.append(np.zeros(256))
+            # 0.5秒未満のセグメントはスキップ（信頼度が低い）
+            if duration < 0.5:
+                continue
 
-            # メモリ解放
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            start_sample = int(seg["start"] * sr)
+            end_sample = int(seg["end"] * sr)
 
-        print(f"✓ {len(embeddings)}個の埋め込みを抽出")
-        return np.array(embeddings)
+            # その時間範囲の音声だけを抽出
+            segment_audio = audio[start_sample:end_sample]
+
+            try:
+                wav = preprocess_wav(segment_audio, source_sr=sr)
+                embedding = self.encoder.embed_utterance(wav)
+                embeddings_list.append(embedding)
+                segment_indices.append(idx)
+            except Exception as e:
+                print(f"⚠ セグメント {idx} 処理エラー: {e}")
+                # エラー時はゼロベクトルを追加
+                embeddings_list.append(np.zeros(256))
+                segment_indices.append(idx)
+
+        # メモリ解放
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"✓ {len(embeddings_list)}個の埋め込みを抽出")
+        return segment_indices, np.array(embeddings_list)
 
     # 特徴量に基づいて話者をクラスタリング
     def cluster_speakers(
@@ -228,6 +240,9 @@ class SpeakerDiarizer:
         Returns:
             話者ラベル配列
         """
+        if len(embeddings) == 0:
+            return np.array([])
+
         print(f"話者をクラスタリング中 (最大: {max_speakers})...")
 
         n_clusters = min(max_speakers, len(embeddings))
@@ -255,53 +270,50 @@ class SpeakerDiarizer:
 class TranscriptBuilder:
     """文字起こしデータを統合するクラス"""
 
-    # セグメントをもとに文字起こしの結果と話者ラベルを統合
+    # Whisper セグメント単位での話者ラベリングに対応
     @staticmethod
     def build_transcript(
         transcription: Dict,
-        segments: List[Dict],
+        segment_indices: List[int],
         speaker_labels: np.ndarray
     ) -> List[Dict]:
-        """文字起こし結果と話者情報を統合
+        """文字起こし結果と話者情報を統合（Whisper セグメント単位）
 
         Args:
             transcription: Whisper の文字起こし結果
-            segments: 音声セグメント
-            speaker_labels: 話者ラベル
+            segment_indices: 処理済みセグメントのインデックスリスト
+            speaker_labels: 話者ラベル配列
 
         Returns:
             統合トランスクリプト（リスト）
         """
         print("トランスクリプトを統合中...")
 
-        segment_times = [(s["start_time"], s["end_time"]) for s in segments]
+        # インデックスとラベルのマッピング
+        speaker_map = {idx: label for idx, label in zip(segment_indices, speaker_labels)}
 
         # 一時的なエントリを生成
         temp_entries = []
 
         if "segments" in transcription:
-            for seg in transcription["segments"]:
-                start_time = seg["start"]
+            for idx, seg in enumerate(transcription["segments"]):
                 text = seg["text"].strip()
 
                 if not text:
                     continue
 
-                # セグメント特定
-                speaker_idx = None
-                for i, (seg_start, seg_end) in enumerate(segment_times):
-                    if seg_start <= start_time < seg_end:
-                        speaker_idx = i
-                        break
-
-                # 話者IDを割り当て
-                if speaker_idx is not None and speaker_idx < len(speaker_labels):
-                    speaker = f"SPEAKER_{speaker_labels[speaker_idx]:02d}"
+                # このセグメントに対応する話者ラベルを取得
+                if idx in speaker_map:
+                    speaker = f"SPEAKER_{speaker_map[idx]:02d}"
                 else:
-                    speaker = "UNKNOWN"
+                    # 処理対象外のセグメント(0.5秒未満など)は前の話者を引き継ぐ
+                    if temp_entries:
+                        speaker = temp_entries[-1]["speaker"]
+                    else:
+                        speaker = "UNKNOWN"
 
                 # タイムスタンプをフォーマット
-                timestamp = str(timedelta(seconds=int(start_time))).split('.')[0]
+                timestamp = str(timedelta(seconds=int(seg["start"]))).split('.')[0]
 
                 temp_entries.append({
                     "timestamp": timestamp,
@@ -420,36 +432,6 @@ class TranscriptExporter:
         print(f"✓ JSON出力: {output_path}")
 
 
-def extract_embeddings_per_whisper_segment(
-    file_path: str,
-    transcription: Dict,
-    sr: int
-) -> Dict[str, np.ndarray]:
-    """Whisper セグメントごとに埋め込みを抽出"""
-    
-    audio, _ = librosa.load(file_path, sr=sr, mono=True)
-    encoder = VoiceEncoder()
-    
-    embeddings_dict = {}
-    
-    # Whisper セグメント（会話の単位）ごとに処理
-    for idx, seg in enumerate(transcription["segments"]):
-        start_sample = int(seg["start"] * sr)
-        end_sample = int(seg["end"] * sr)
-        
-        # その時間範囲の音声だけを抽出
-        segment_audio = audio[start_sample:end_sample]
-        
-        try:
-            wav = preprocess_wav(segment_audio, source_sr=sr)
-            embedding = encoder.embed_utterance(wav)
-            embeddings_dict[idx] = embedding  # セグメントごとに埋め込み
-        except Exception as e:
-            embeddings_dict[idx] = np.zeros(256)
-    
-    return embeddings_dict
-
-
 def main(file_path: str, max_speakers: int = 6) -> str:
     """メイン処理
 
@@ -462,23 +444,24 @@ def main(file_path: str, max_speakers: int = 6) -> str:
     """
     start_time = time.time()
 
-    # 1. 音声をロード＆セグメント分割
+    # 1. 音声をロード
     audio_proc = AudioProcessor()
     audio, sr = audio_proc.load_audio(file_path)
-    segments = audio_proc.split_into_segments(audio, sr)
 
     # 2. 文字起こし
     trans_proc = TranscriptionProcessor()
     transcription = trans_proc.transcribe(file_path)
 
-    # 3. 話者埋め込み抽出＆クラスタリング
+    # 3. Whisper セグメント単位で話者埋め込み抽出＆クラスタリング
     diarizer = SpeakerDiarizer()
-    embeddings = diarizer.extract_embeddings(segments, sr)
+    segment_indices, embeddings = diarizer.extract_embeddings_per_whisper_segment(
+        file_path, transcription, sr
+    )
     speaker_labels = diarizer.cluster_speakers(embeddings, max_speakers)
 
     # 4. トランスクリプト統合
     builder = TranscriptBuilder()
-    transcript = builder.build_transcript(transcription, segments, speaker_labels)
+    transcript = builder.build_transcript(transcription, segment_indices, speaker_labels)
     transcript = builder.detect_narration(transcript)
     transcript = builder.correct_transcript(transcript)
 
