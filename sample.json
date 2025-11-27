@@ -1,9 +1,9 @@
 {
   "metadata": {
     "source_file": "sample.mov",
-    "processing_time": 100.27,
+    "processing_time": 424.11,
     "num_speakers": 3,
-    "created_at": "2025-11-27T00:24:17.941858"
+    "created_at": "2025-11-27T23:36:46.483388"
   },
   "transcript": [
     {
@@ -15,13 +15,13 @@
     {
       "timestamp": "0:00:30",
       "speaker": "SPEAKER_01",
-      "content": "ん。",
+      "content": "Tail はぁ。",
       "is_narration": false
     },
     {
-      "timestamp": "0:01:30",
+      "timestamp": "0:00:47",
       "speaker": "SPEAKER_00",
-      "content": "今日は、ワニャンです。 カルフルアメコリ、毎日ちょっとしたご褒美を、レディーゴーで頂きます。 レディアムガーナ、食べていいですか? どうですか? 言葉はしない、劇的一つで。レミアムガーナ。 レミアムガーナ、夜Nathanの片隣で会いに来た。 買い物に行って、せいで悩みます。 ご視聴ありがとうございました!。",
+      "content": "先出した一曲 ん で今日は 毎日 ちょっとしたご褒美 レディー 食べていいですか デミアムガーナ うぅー 今いまいま いまでしょ いまでしょ 幸せは食べるとしゃべるでできている 帰ればきっと 帰ればきっと。",
       "is_narration": false
     }
   ]

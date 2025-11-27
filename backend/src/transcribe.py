@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 
 # ナレーションキーワード定義
-NARRATION_KEYWORDS = ["クトゥルフ神話TRPG", "はじめて"]
+NARRATION_KEYWORDS = ["クトゥルフ神話TRPG", "はじめ"]
 
 
 class AudioProcessor:
@@ -32,6 +32,7 @@ class AudioProcessor:
         """
         self.target_sr = target_sr
 
+    # 音声ファイルを読み込む処理, 動画データの時は_load_via_ffmpeg()を実行
     def load_audio(self, file_path: str) -> Tuple[np.ndarray, int]:
         """音声ファイルをロード
 
@@ -51,11 +52,12 @@ class AudioProcessor:
                 mono=True
             )
             print(f"✓ librosaで正常にロード (sr: {sr}Hz)")
-            return audio, sr
+            return audio, sr    # pyright: ignore[reportReturnType]
         except Exception as e:
             print(f"✗ librosaでのロードに失敗: {e}")
             return self._load_via_ffmpeg(file_path)
 
+    # データが音声ではなく動画だった場合の処理
     def _load_via_ffmpeg(self, file_path: str) -> Tuple[np.ndarray, int]:
         """FFmpegを使用して音声をロード（フォールバック）"""
         print("FFmpegで再抽出を試みます...")
@@ -76,10 +78,11 @@ class AudioProcessor:
                 subprocess.run(cmd, check=True)
                 audio, sr = librosa.load(wav_path, sr=self.target_sr, mono=True)
                 print(f"✓ FFmpegで正常にロード")
-                return audio, sr
+                return audio, sr    # pyright: ignore[reportReturnType]
             except Exception as e:
                 raise RuntimeError(f"音声ロード失敗: {e}")
 
+    # 音声をセグメントに分割する
     def split_into_segments(
         self,
         audio: np.ndarray,
@@ -129,6 +132,7 @@ class TranscriptionProcessor:
         self.model_size = model_size
         self.model = None
 
+    # 音声・動画データを文字起こし
     def transcribe(self, file_path: str) -> Dict:
         """Whisperで文字起こし
 
@@ -170,6 +174,7 @@ class SpeakerDiarizer:
         self.batch_size = batch_size
         self.encoder = VoiceEncoder()
 
+    # 音声・動画データから話者特徴を抽出
     def extract_embeddings(
         self,
         segments: List[Dict],
@@ -208,6 +213,7 @@ class SpeakerDiarizer:
         print(f"✓ {len(embeddings)}個の埋め込みを抽出")
         return np.array(embeddings)
 
+    # 特徴量に基づいて話者をクラスタリング
     def cluster_speakers(
         self,
         embeddings: np.ndarray,
@@ -249,6 +255,7 @@ class SpeakerDiarizer:
 class TranscriptBuilder:
     """文字起こしデータを統合するクラス"""
 
+    # セグメントをもとに文字起こしの結果と話者ラベルを統合
     @staticmethod
     def build_transcript(
         transcription: Dict,
@@ -314,7 +321,7 @@ class TranscriptBuilder:
                 current_speaker = entry["speaker"]
                 current_entry = entry.copy()
             else:
-                current_entry["content"] += " " + entry["content"]
+                current_entry["content"] += " " + entry["content"]  # pyright: ignore[reportOptionalSubscript]
 
         if current_entry:
             merged.append(current_entry)
@@ -411,6 +418,36 @@ class TranscriptExporter:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
         print(f"✓ JSON出力: {output_path}")
+
+
+def extract_embeddings_per_whisper_segment(
+    file_path: str,
+    transcription: Dict,
+    sr: int
+) -> Dict[str, np.ndarray]:
+    """Whisper セグメントごとに埋め込みを抽出"""
+    
+    audio, _ = librosa.load(file_path, sr=sr, mono=True)
+    encoder = VoiceEncoder()
+    
+    embeddings_dict = {}
+    
+    # Whisper セグメント（会話の単位）ごとに処理
+    for idx, seg in enumerate(transcription["segments"]):
+        start_sample = int(seg["start"] * sr)
+        end_sample = int(seg["end"] * sr)
+        
+        # その時間範囲の音声だけを抽出
+        segment_audio = audio[start_sample:end_sample]
+        
+        try:
+            wav = preprocess_wav(segment_audio, source_sr=sr)
+            embedding = encoder.embed_utterance(wav)
+            embeddings_dict[idx] = embedding  # セグメントごとに埋め込み
+        except Exception as e:
+            embeddings_dict[idx] = np.zeros(256)
+    
+    return embeddings_dict
 
 
 def main(file_path: str, max_speakers: int = 6) -> str:

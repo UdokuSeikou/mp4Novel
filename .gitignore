@@ -10,6 +10,7 @@ package-lock.json
 
 # IDE
 .vscode/*
+.vscode
 !.vscode/extensions.json
 .idea
 .DS_Store
