@@ -1,0 +1,127 @@
+:root {
+	--font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+	--line-height: 1.5;
+	--font-weight: 400;
+
+	--color-primary: #646cff;
+	--color-primary-hover: #535bf2;
+	--color-bg: #f9fafb;
+	--color-surface: #ffffff;
+	--color-text: #213547;
+	--color-text-light: #6b7280;
+	--color-border: #e5e7eb;
+
+	/* Accent Colors */
+	--color-accent-blue: #3b82f6;
+	--color-accent-green: #10b981;
+	--color-accent-red: #ef4444;
+
+	--shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+	--shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+	--shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+	--radius: 0.5rem;
+	--radius-lg: 0.75rem;
+
+	font-family: var(--font-family);
+	line-height: var(--line-height);
+	font-weight: var(--font-weight);
+
+	color-scheme: light dark;
+	color: var(--color-text);
+	background-color: var(--color-bg);
+
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+body {
+	margin: 0;
+	display: flex;
+	place-items: center;
+	min-width: 320px;
+	min-height: 100vh;
+	width: 100%;
+}
+
+#root {
+	max-width: 1280px;
+	width: 100%;
+	margin: 0 auto;
+	padding: 2rem;
+	text-align: center;
+}
+
+h1 {
+	font-size: 3.2em;
+	line-height: 1.1;
+	margin-bottom: 2rem;
+	background: -webkit-linear-gradient(315deg, #42d392 25%, #647eff);
+	background-clip: text;
+	-webkit-background-clip: text;
+	-webkit-text-fill-color: transparent;
+}
+
+button {
+	border-radius: 8px;
+	border: 1px solid transparent;
+	padding: 0.6em 1.2em;
+	font-size: 1em;
+	font-weight: 500;
+	font-family: inherit;
+	background-color: var(--color-surface);
+	cursor: pointer;
+	transition: border-color 0.25s, box-shadow 0.25s;
+	box-shadow: var(--shadow-sm);
+}
+
+button:hover {
+	border-color: var(--color-primary);
+}
+
+button:focus,
+button:focus-visible {
+	outline: 4px auto -webkit-focus-ring-color;
+}
+
+.card {
+	background-color: var(--color-surface);
+	padding: 2rem;
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow);
+	border: 1px solid var(--color-border);
+}
+
+/* Utilities */
+.flex {
+	display: flex;
+}
+.flex-col {
+	flex-direction: column;
+}
+.items-center {
+	align-items: center;
+}
+.justify-center {
+	justify-content: center;
+}
+.gap-2 {
+	gap: 0.5rem;
+}
+.gap-4 {
+	gap: 1rem;
+}
+.w-full {
+	width: 100%;
+}
+.mt-4 {
+	margin-top: 1rem;
+}
+.text-sm {
+	font-size: 0.875rem;
+}
+.text-gray {
+	color: var(--color-text-light);
+}
