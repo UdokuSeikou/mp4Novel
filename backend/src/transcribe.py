@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from datetime import timedelta, datetime
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Callable
 
 import whisper
 import numpy as np
@@ -33,7 +33,7 @@ class AudioProcessor:
         self.target_sr = target_sr
 
     # 音声ファイルを読み込む処理, 動画データの時は_load_via_ffmpeg()を実行
-    def load_audio(self, file_path: str) -> Tuple[np.ndarray, int]:
+    def load_audio(self, file_path: str, progress_callback: Optional[Callable] = None) -> Tuple[np.ndarray, int]:
         """音声ファイルをロード
 
         Args:
@@ -43,6 +43,8 @@ class AudioProcessor:
             (audio_array, sample_rate) のタプル
         """
         print(f"音声ファイルをロード中: {file_path}")
+        if progress_callback:
+            progress_callback("loading_audio", 0, "音声ファイルをロード中...")
 
         try:
             # librosaで直接ロード
@@ -55,10 +57,10 @@ class AudioProcessor:
             return audio, sr    # pyright: ignore[reportReturnType]
         except Exception as e:
             print(f"✗ librosaでのロードに失敗: {e}")
-            return self._load_via_ffmpeg(file_path)
+            return self._load_via_ffmpeg(file_path, progress_callback)
 
     # データが音声ではなく動画だった場合の処理
-    def _load_via_ffmpeg(self, file_path: str) -> Tuple[np.ndarray, int]:
+    def _load_via_ffmpeg(self, file_path: str, progress_callback: Optional[Callable] = None) -> Tuple[np.ndarray, int]:
         """FFmpegを使用して音声をロード（フォールバック）"""
         print("FFmpegで再抽出を試みます...")
 
@@ -133,7 +135,7 @@ class TranscriptionProcessor:
         self.model = None
 
     # 音声・動画データを文字起こし
-    def transcribe(self, file_path: str) -> Dict:
+    def transcribe(self, file_path: str, progress_callback: Optional[Callable] = None) -> Dict:
         """Whisperで文字起こし
 
         Args:
@@ -143,6 +145,8 @@ class TranscriptionProcessor:
             文字起こし結果（辞書）
         """
         print(f"文字起こしを実行中 (モデル: {self.model_size})...")
+        if progress_callback:
+            progress_callback("transcribing", 20, "Whisperで文字起こし中...")
 
         if self.model is None:
             self.model = whisper.load_model(self.model_size)
@@ -175,7 +179,8 @@ class SpeakerDiarizer:
         self,
         file_path: str,
         transcription: Dict,
-        sr: int
+        sr: int,
+        progress_callback: Optional[Callable] = None
     ) -> Tuple[List[int], np.ndarray]:
         """Whisper セグメントごとに埋め込みを抽出
 
@@ -188,13 +193,19 @@ class SpeakerDiarizer:
             (セグメントインデックスリスト, 埋め込み行列)
         """
         print("Whisper セグメント単位で話者特徴を抽出中...")
+        if progress_callback:
+            progress_callback("extracting_speakers", 60, "話者特徴を抽出中...")
 
         audio, _ = librosa.load(file_path, sr=sr, mono=True)
         embeddings_list = []
         segment_indices = []
 
         # Whisper セグメント（会話の単位）ごとに処理
+        total_segments = len(transcription["segments"])
         for idx, seg in enumerate(tqdm(transcription["segments"])):
+            if progress_callback and idx % 10 == 0:
+                progress = 60 + int((idx / total_segments) * 20)  # 60-80%
+                progress_callback("extracting_speakers", progress, f"話者特徴を抽出中 ({idx}/{total_segments})...")
             duration = seg["end"] - seg["start"]
 
             # 0.5秒未満のセグメントはスキップ（信頼度が低い）
@@ -229,7 +240,8 @@ class SpeakerDiarizer:
     def cluster_speakers(
         self,
         embeddings: np.ndarray,
-        max_speakers: int = 6
+        max_speakers: int = 6,
+        progress_callback: Optional[Callable] = None
     ) -> np.ndarray:
         """話者クラスタリング
 
@@ -244,6 +256,8 @@ class SpeakerDiarizer:
             return np.array([])
 
         print(f"話者をクラスタリング中 (最大: {max_speakers})...")
+        if progress_callback:
+            progress_callback("clustering", 80, "話者をクラスタリング中...")
 
         n_clusters = min(max_speakers, len(embeddings))
 
@@ -432,7 +446,7 @@ class TranscriptExporter:
         print(f"✓ JSON出力: {output_path}")
 
 
-def main(file_path: str, max_speakers: int = 6) -> str:
+def main(file_path: str, max_speakers: int = 6, progress_callback: Optional[Callable] = None) -> str:
     """メイン処理
 
     Args:
@@ -446,20 +460,22 @@ def main(file_path: str, max_speakers: int = 6) -> str:
 
     # 1. 音声をロード
     audio_proc = AudioProcessor()
-    audio, sr = audio_proc.load_audio(file_path)
+    audio, sr = audio_proc.load_audio(file_path, progress_callback)
 
     # 2. 文字起こし
-    trans_proc = TranscriptionProcessor()
-    transcription = trans_proc.transcribe(file_path)
+    trans_proc = TranscriptionProcessor(model_size='large')
+    transcription = trans_proc.transcribe(file_path, progress_callback)
 
     # 3. Whisper セグメント単位で話者埋め込み抽出＆クラスタリング
     diarizer = SpeakerDiarizer()
     segment_indices, embeddings = diarizer.extract_embeddings_per_whisper_segment(
-        file_path, transcription, sr
+        file_path, transcription, sr, progress_callback
     )
-    speaker_labels = diarizer.cluster_speakers(embeddings, max_speakers)
+    speaker_labels = diarizer.cluster_speakers(embeddings, max_speakers, progress_callback)
 
     # 4. トランスクリプト統合
+    if progress_callback:
+        progress_callback("saving", 90, "トランスクリプトを統合中...")
     builder = TranscriptBuilder()
     transcript = builder.build_transcript(transcription, segment_indices, speaker_labels)
     transcript = builder.detect_narration(transcript)
@@ -473,6 +489,8 @@ def main(file_path: str, max_speakers: int = 6) -> str:
     output_path = base + ".json"
 
     exporter = TranscriptExporter()
+    if progress_callback:
+        progress_callback("saving", 95, "JSONファイルを出力中...")
     exporter.export_json(
         transcript,
         output_path,

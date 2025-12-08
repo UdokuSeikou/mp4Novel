@@ -4,15 +4,17 @@ npm-debug.log*
 package-lock.json
 
 # Pythonが生成するキャッシュや一時ファイル
-__pycache__/
+__pycache__
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache
 
 # Environment variables
 .env
 .env.local
 .env.*.local
+.venv
 
 # IDE
 .vscode/*
@@ -57,3 +59,5 @@ Memo.md
 参考.py
 
 plan-mp4Novel.prompt.md
+GEMINI.md
+sample.json

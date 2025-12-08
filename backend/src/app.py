@@ -13,27 +13,46 @@ from typing import Optional, List
 from enum import Enum
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    HTTPException,
+    BackgroundTasks,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocket
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from transcribe import main as transcribe_main, TranscriptBuilder
 
 
 # ==================== 設定 ====================
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parent.joinpath(".env")),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+    UPLOAD_FOLDER: Path = Path("./default")
+    OUTPUT_FOLDER: Path = Path("./default")
+    INT_VALUE: int = -1
 
-UPLOAD_FOLDER = Path(__file__).parent / "uploads"
-OUTPUT_FOLDER = Path(__file__).parent / "outputs"
-ALLOWED_EXTENSIONS = {".mp4", ".mp3", ".wav", ".m4a"}
+
+settings = Settings()
+
+UPLOAD_FOLDER = settings.UPLOAD_FOLDER
+OUTPUT_FOLDER = settings.OUTPUT_FOLDER
+ALLOWED_EXTENSIONS = {".mp4", ".mp3", ".wav", ".m4a", ".mov"}
 
 # ディレクトリ作成
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 
 # ==================== Pydantic モデル ====================
-
 
 class ProgressEvent(str, Enum):
     """進捗イベントの種類"""
@@ -115,6 +134,7 @@ progress_map: dict[str, dict] = {}
 # WebSocket接続の管理
 class ConnectionManager:
     """WebSocket接続管理"""
+
     def __init__(self):
         self.active_connections: dict[str, list[WebSocket]] = {}
 
@@ -144,9 +164,7 @@ manager = ConnectionManager()
 # ==================== FastAPI アプリケーション ====================
 
 app = FastAPI(
-    title="mp4Novel API",
-    description="動画・音声ファイル文字起こしAPI",
-    version="1.0.0"
+    title="mp4Novel API", description="動画・音声ファイル文字起こしAPI", version="1.0.0"
 )
 
 # CORS設定
@@ -161,79 +179,62 @@ app.add_middleware(
 
 # ==================== ヘルパー関数 ====================
 
-def is_allowed_file(filename: str) -> bool:
+
+def is_allowed_file(filename: str | None) -> bool:
     """許可されたファイル形式かチェック"""
-    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+    if filename is not None:
+        return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+    return False
 
 
-async def update_progress(file_id: str, step: ProgressEvent, progress: int, message: str, result: dict = None, error: str = None):
+async def update_progress(
+    file_id: str,
+    step: ProgressEvent,
+    progress: int,
+    message: str,
+    result: dict | None = None,
+    error: str | None = None,
+):
     """進捗情報を更新してWebSocketで配信"""
     progress_map[file_id] = {
         "step": step,
         "progress": progress,
         "message": message,
         "result": result,
-        "error": error
+        "error": error,
     }
 
-    await manager.broadcast(file_id, {
-        "step": step.value,
-        "progress": progress,
-        "message": message,
-        "result": result,
-        "error": error
-    })
+    await manager.broadcast(
+        file_id,
+        {
+            "step": step.value,
+            "progress": progress,
+            "message": message,
+            "result": result,
+            "error": error,
+        },
+    )
 
 
 async def process_transcription(file_path: str, file_id: str, max_speakers: int = 6):
     """バックグラウンドで文字起こし処理を実行"""
     try:
-        # ステップ1: 音声ロード（0-20%）
-        await update_progress(
-            file_id,
-            ProgressEvent.LOADING_AUDIO,
-            15,
-            "音声ファイルをロード中..."
-        )
-
-        # ステップ2: 文字起こし（20-60%）
-        await update_progress(
-            file_id,
-            ProgressEvent.TRANSCRIBING,
-            40,
-            "Whisperで文字起こし中..."
-        )
-
-        # ステップ3: 話者特徴抽出（60-80%）
-        await update_progress(
-            file_id,
-            ProgressEvent.EXTRACTING_SPEAKERS,
-            70,
-            "話者特徴を抽出中..."
-        )
-
-        # ステップ4: クラスタリング（80-95%）
-        await update_progress(
-            file_id,
-            ProgressEvent.CLUSTERING,
-            85,
-            "話者をクラスタリング中..."
-        )
-
         # メイン処理を実行（非同期で実行）
-        output_json = await asyncio.to_thread(
-            transcribe_main,
-            file_path,
-            max_speakers
-        )
+        loop = asyncio.get_running_loop()
 
-        # ステップ5: JSON保存（95-100%）
-        await update_progress(
-            file_id,
-            ProgressEvent.SAVING,
-            95,
-            "結果をJSON保存中..."
-        )
+        def callback(step: str, progress: int, message: str):
+            # Enum変換を試みる
+            try:
+                event = ProgressEvent(step)
+            except ValueError:
+                event = ProgressEvent.TRANSCRIBING # フォールバック
+
+            asyncio.run_coroutine_threadsafe(
+                update_progress(file_id, event, progress, message),
+                loop
+            )
+
+        output_json = await asyncio.to_thread(transcribe_main, file_path, max_speakers, callback)
 
         # 生成されたJSONを読み込む
         with open(output_json, "r", encoding="utf-8") as f:
@@ -242,6 +243,7 @@ async def process_transcription(file_path: str, file_id: str, max_speakers: int 
         # 結果をoutputs フォルダに移動
         output_path = OUTPUT_FOLDER / f"{file_id}.json"
         import shutil
+
         shutil.move(output_json, output_path)
 
         # 完了
@@ -256,8 +258,8 @@ async def process_transcription(file_path: str, file_id: str, max_speakers: int 
                 "json_path": str(output_path),
                 "processing_time": result_data["metadata"]["processing_time"],
                 "num_speakers": result_data["metadata"]["num_speakers"],
-                "transcript": result_data["transcript"]
-            }
+                "transcript": result_data["transcript"],
+            },
         )
 
         # テンポラリファイルを削除
@@ -270,7 +272,7 @@ async def process_transcription(file_path: str, file_id: str, max_speakers: int 
             ProgressEvent.ERROR,
             -1,
             "処理中にエラーが発生しました",
-            error=str(e)
+            error=str(e),
         )
 
 
@@ -278,8 +280,16 @@ def get_speakers_with_colors(file_id: str) -> List[SpeakerInfo]:
     """話者情報を色付きで取得"""
     # プリセットカラーパレット
     colors = [
-        "#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8",
-        "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739", "#52B788"
+        "#FF6B6B",
+        "#4ECDC4",
+        "#45B7D1",
+        "#FFA07A",
+        "#98D8C8",
+        "#F7DC6F",
+        "#BB8FCE",
+        "#85C1E2",
+        "#F8B739",
+        "#52B788",
     ]
 
     # JSON ファイルから読み込む
@@ -300,7 +310,7 @@ def get_speakers_with_colors(file_id: str) -> List[SpeakerInfo]:
                 "speaker_id": speaker_id,
                 "label": f"Speaker {speaker_idx + 1}",
                 "is_narration": entry["is_narration"],
-                "color": colors[speaker_idx % len(colors)]
+                "color": colors[speaker_idx % len(colors)],
             }
 
     return [SpeakerInfo(**info) for info in speakers.values()]
@@ -308,21 +318,22 @@ def get_speakers_with_colors(file_id: str) -> List[SpeakerInfo]:
 
 # ==================== エンドポイント ====================
 
+
 @app.get("/")
 async def root():
     """ルートエンドポイント"""
     return {
         "name": "mp4Novel API",
         "version": "1.0.0",
-        "description": "動画・音声ファイル文字起こしAPI"
+        "description": "動画・音声ファイル文字起こしAPI",
     }
 
 
 @app.post("/api/transcribe", response_model=TranscribeResponse)
 async def transcribe(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     max_speakers: int = 6,
-    background_tasks: BackgroundTasks = None
 ):
     """
     ファイルアップロード + 文字起こし開始
@@ -344,8 +355,8 @@ async def transcribe(
             detail={
                 "error": "Invalid file format. MP4, MP3, WAV, M4A only.",
                 "error_code": "INVALID_FILE_FORMAT",
-                "status_code": 400
-            }
+                "status_code": 400,
+            },
         )
 
     # ファイルID生成
@@ -358,18 +369,16 @@ async def transcribe(
         f.write(contents)
 
     # バックグラウンドタスク登録
-    background_tasks.add_task(
-        process_transcription,
-        str(file_path),
-        file_id,
-        max_speakers
-    )
+    if background_tasks is not None:
+        background_tasks.add_task(
+            process_transcription, str(file_path), file_id, max_speakers
+        )
 
     return TranscribeResponse(
         file_id=file_id,
-        filename=file.filename,
+        filename=file.filename, # pyright: ignore[reportArgumentType]
         status="processing",
-        message="文字起こしを開始しました"
+        message="文字起こしを開始しました",
     )
 
 
@@ -386,13 +395,15 @@ async def websocket_progress(websocket: WebSocket, file_id: str):
         # 既に進捗情報がある場合は最新情報を送信
         if file_id in progress_map:
             info = progress_map[file_id]
-            await websocket.send_json({
-                "step": info["step"].value,
-                "progress": info["progress"],
-                "message": info["message"],
-                "result": info["result"],
-                "error": info["error"]
-            })
+            await websocket.send_json(
+                {
+                    "step": info["step"].value,
+                    "progress": info["progress"],
+                    "message": info["message"],
+                    "result": info["result"],
+                    "error": info["error"],
+                }
+            )
 
         # クライアントからのメッセージ受信（キープアライブ用）
         while True:
@@ -426,8 +437,8 @@ async def get_transcript(file_id: str):
             detail={
                 "error": "Transcript not found",
                 "error_code": "NOT_FOUND",
-                "status_code": 404
-            }
+                "status_code": 404,
+            },
         )
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -435,17 +446,14 @@ async def get_transcript(file_id: str):
 
     # Pydanticモデルに変換
     entries = [
-        TranscriptEntry(
-            **entry,
-            color=None  # 初期は色なし（フロントで設定）
-        )
+        TranscriptEntry(**entry, color=None)  # 初期は色なし（フロントで設定）
         for entry in data["transcript"]
     ]
 
     return TranscriptResponse(
         file_id=file_id,
         metadata=TranscriptMetadata(**data["metadata"]),
-        transcript=entries
+        transcript=entries,
     )
 
 
@@ -471,8 +479,8 @@ async def save_transcript(file_id: str, data: dict):
             detail={
                 "error": "Transcript not found",
                 "error_code": "NOT_FOUND",
-                "status_code": 404
-            }
+                "status_code": 404,
+            },
         )
 
     # 元のメタデータを保持
@@ -482,7 +490,7 @@ async def save_transcript(file_id: str, data: dict):
     # 編集済みファイルを保存
     edited_data = {
         "metadata": original["metadata"],
-        "transcript": data.get("transcript", original["transcript"])
+        "transcript": data.get("transcript", original["transcript"]),
     }
 
     edited_path = OUTPUT_FOLDER / f"{file_id}.edited.json"
@@ -492,7 +500,7 @@ async def save_transcript(file_id: str, data: dict):
     return {
         "status": "saved",
         "edited_json_path": str(edited_path),
-        "message": "編集内容を保存しました"
+        "message": "編集内容を保存しました",
     }
 
 
@@ -513,13 +521,17 @@ async def list_transcripts(skip: int = 0, limit: int = 10):
     """
     # JSON ファイル一覧を取得
     json_files = sorted(
-        [f for f in OUTPUT_FOLDER.glob("*.json") if not f.name.endswith(".edited.json")],
+        [
+            f
+            for f in OUTPUT_FOLDER.glob("*.json")
+            if not f.name.endswith(".edited.json")
+        ],
         key=lambda x: x.stat().st_mtime,
-        reverse=True
+        reverse=True,
     )
 
     items = []
-    for json_file in json_files[skip:skip+limit]:
+    for json_file in json_files[skip : skip + limit]:
         file_id = json_file.stem
         with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -527,21 +539,18 @@ async def list_transcripts(skip: int = 0, limit: int = 10):
         # 編集済みファイルの有無をチェック
         edited_path = OUTPUT_FOLDER / f"{file_id}.edited.json"
 
-        items.append({
-            "file_id": file_id,
-            "filename": data["metadata"]["source_file"],
-            "created_at": data["metadata"]["created_at"],
-            "num_speakers": data["metadata"]["num_speakers"],
-            "processing_time": data["metadata"]["processing_time"],
-            "has_edited": edited_path.exists()
-        })
+        items.append(
+            {
+                "file_id": file_id,
+                "filename": data["metadata"]["source_file"],
+                "created_at": data["metadata"]["created_at"],
+                "num_speakers": data["metadata"]["num_speakers"],
+                "processing_time": data["metadata"]["processing_time"],
+                "has_edited": edited_path.exists(),
+            }
+        )
 
-    return {
-        "items": items,
-        "total": len(json_files),
-        "skip": skip,
-        "limit": limit
-    }
+    return {"items": items, "total": len(json_files), "skip": skip, "limit": limit}
 
 
 @app.delete("/api/transcript/{file_id}")
@@ -565,8 +574,8 @@ async def delete_transcript(file_id: str):
             detail={
                 "error": "Transcript not found",
                 "error_code": "NOT_FOUND",
-                "status_code": 404
-            }
+                "status_code": 404,
+            },
         )
 
     # JSON ファイル削除
@@ -580,10 +589,7 @@ async def delete_transcript(file_id: str):
     if file_id in progress_map:
         del progress_map[file_id]
 
-    return {
-        "status": "deleted",
-        "file_id": file_id
-    }
+    return {"status": "deleted", "file_id": file_id}
 
 
 @app.get("/api/speakers/{file_id}", response_model=SpeakersResponse)
@@ -605,8 +611,8 @@ async def get_speakers(file_id: str):
             detail={
                 "error": "Speakers not found",
                 "error_code": "NOT_FOUND",
-                "status_code": 404
-            }
+                "status_code": 404,
+            },
         )
 
     return SpeakersResponse(speakers=speakers)
@@ -617,10 +623,4 @@ async def get_speakers(file_id: str):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
